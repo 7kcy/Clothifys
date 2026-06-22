@@ -1,113 +1,18 @@
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-};
-
 export const config = { runtime: "edge" };
 
-export default async function handler(request) {
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "*/*",
+};
 
-  if (!id || !/^\d+$/.test(id)) {
-    return new Response(JSON.stringify({ error: "Invalid asset ID." }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-  }
-
-  try {
-    const deliveryRes = await fetch(
-      `https://assetdelivery.roblox.com/v1/assetId/${id}`,
-      { headers: HEADERS }
-    );
-
-    if (!deliveryRes.ok) {
-      return new Response(JSON.stringify({ error: "Could not reach Roblox. Try again shortly." }), {
-        status: 502,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
-    }
-
-    const deliveryJson = await deliveryRes.json();
-    const location = deliveryJson?.location;
-
-    if (!location) {
-      return new Response(JSON.stringify({ error: "Asset not found or not accessible." }), {
-        status: 404,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
-    }
-
-    const assetRes = await fetch(location, { headers: HEADERS, redirect: "follow" });
-
-    if (!assetRes.ok) {
-      return new Response(JSON.stringify({ error: "Could not download asset from Roblox CDN." }), {
-        status: 502,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
-    }
-
-    const contentType = assetRes.headers.get("content-type") || "";
-
-    if (contentType.startsWith("image/")) {
-      const buffer = await assetRes.arrayBuffer();
-      return new Response(buffer, {
-        status: 200,
-        headers: {
-          "Content-Type": contentType,
-          "Cache-Control": "public, max-age=86400",
-          "Access-Control-Allow-Origin": "*"
-        }
-      });
-    }
-
-    const xml = await assetRes.text();
-
-    const urlTagMatch = xml.match(/<url>\s*(https?:\/\/[^<\s]+)\s*<\/url>/i);
-    if (urlTagMatch) {
-      const innerUrl = urlTagMatch[1].trim();
-      const idInUrl = innerUrl.match(/[?&]id=(\d+)/i);
-      if (idInUrl) return await fetchImageById(idInUrl[1]);
-      return await fetchImageByUrl(innerUrl);
-    }
-
-    const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
-    if (rbxMatch) return await fetchImageById(rbxMatch[1]);
-
-    const bareUrlMatch = xml.match(/https?:\/\/www\.roblox\.com\/asset\/\?id=(\d+)/i);
-    if (bareUrlMatch) return await fetchImageById(bareUrlMatch[1]);
-
-    return new Response(JSON.stringify({ error: "Not a classic clothing item." }), {
-      status: 404,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-
-  } catch (err) {
-    return new Response(JSON.stringify({ error: "Server error. Please try again." }), {
-      status: 500,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-  }
+function jsonResp(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+  });
 }
 
-async function fetchImageById(id) {
-  const deliveryRes = await fetch(
-    `https://assetdelivery.roblox.com/v1/assetId/${id}`,
-    { headers: HEADERS }
-  );
-  if (!deliveryRes.ok) return new Response(JSON.stringify({ error: "Could not fetch template image." }), { status: 502, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
-  const json = await deliveryRes.json();
-  if (!json?.location) return new Response(JSON.stringify({ error: "Template image not found." }), { status: 404, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
-  return fetchImageByUrl(json.location);
-}
-
-async function fetchImageByUrl(url) {
-  const imgRes = await fetch(url, { headers: HEADERS, redirect: "follow" });
-  if (!imgRes.ok) return new Response(JSON.stringify({ error: "Could not fetch template image from Roblox." }), { status: 502, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
-  const buffer = await imgRes.arrayBuffer();
-  const contentType = imgRes.headers.get("content-type") || "image/png";
+function imgResp(buffer, contentType) {
   return new Response(buffer, {
     status: 200,
     headers: {
@@ -116,4 +21,88 @@ async function fetchImageByUrl(url) {
       "Access-Control-Allow-Origin": "*"
     }
   });
+}
+
+export default async function handler(request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get("id");
+
+  if (!id || !/^\d+$/.test(id)) {
+    return jsonResp({ error: "Invalid asset ID." }, 400);
+  }
+
+  try {
+    // Step 1: get asset details to find the texture asset ID
+    const infoRes = await fetch(
+      `https://economy.roblox.com/v2/assets/${id}/details`,
+      { headers: HEADERS }
+    );
+
+    if (!infoRes.ok) {
+      return jsonResp({ error: "Could not find that asset on Roblox." }, 502);
+    }
+
+    const info = await infoRes.json();
+    // AssetTypeId 11 = Shirt, 12 = Pants
+    if (info.AssetTypeId !== 11 && info.AssetTypeId !== 12) {
+      return jsonResp({ error: "Not a classic shirt or pants item." }, 400);
+    }
+
+    // Step 2: get the asset XML to find the texture ID
+    const xmlRes = await fetch(
+      `https://assetdelivery.roblox.com/v1/asset/?id=${id}`,
+      { headers: HEADERS }
+    );
+
+    if (!xmlRes.ok) {
+      return jsonResp({ error: "Could not load asset data." }, 502);
+    }
+
+    const xml = await xmlRes.text();
+
+    // Extract texture asset ID from XML
+    let textureId = null;
+    const urlMatch = xml.match(/<url>[^<]*[?&]id=(\d+)[^<]*<\/url>/i);
+    if (urlMatch) textureId = urlMatch[1];
+    if (!textureId) {
+      const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
+      if (rbxMatch) textureId = rbxMatch[1];
+    }
+
+    if (!textureId) {
+      return jsonResp({ error: "Could not find texture for this item." }, 404);
+    }
+
+    // Step 3: fetch the actual PNG via assetdelivery
+    const imgRes = await fetch(
+      `https://assetdelivery.roblox.com/v1/asset/?id=${textureId}`,
+      { headers: HEADERS }
+    );
+
+    if (!imgRes.ok) {
+      return jsonResp({ error: "Could not download template image." }, 502);
+    }
+
+    const contentType = imgRes.headers.get("content-type") || "image/png";
+    if (contentType.startsWith("image/")) {
+      const buffer = await imgRes.arrayBuffer();
+      return imgResp(buffer, contentType);
+    }
+
+    // If we got another redirect/XML, one more hop
+    const xml2 = await imgRes.text();
+    const urlMatch2 = xml2.match(/<url>[^<]*[?&]id=(\d+)[^<]*<\/url>/i) || xml2.match(/rbxassetid:\/\/(\d+)/i);
+    if (!urlMatch2) return jsonResp({ error: "Template not found." }, 404);
+
+    const finalRes = await fetch(
+      `https://assetdelivery.roblox.com/v1/asset/?id=${urlMatch2[1]}`,
+      { headers: HEADERS }
+    );
+    if (!finalRes.ok) return jsonResp({ error: "Could not fetch final image." }, 502);
+    const buffer = await finalRes.arrayBuffer();
+    return imgResp(buffer, finalRes.headers.get("content-type") || "image/png");
+
+  } catch (err) {
+    return jsonResp({ error: "Server error: " + err.message }, 500);
+  }
 }
