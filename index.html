@@ -666,22 +666,42 @@
         throw new Error('Thumbnail not available for this item.');
       }
 
-      // Step 2: Display image directly (rbxcdn.com blocks fetch/CORS but allows <img> src)
+      // Step 2: Display image directly (rbxcdn.com blocks fetch but allows <img> src)
       const imageUrl = thumbItem.imageUrl;
 
+      img.crossOrigin = 'anonymous';
       img.src = imageUrl;
       img.style.display = 'block';
       loading.style.display = 'none';
 
-      // For download, pass the CDN URL directly so server doesn't need to call Roblox again
-      saveLink.href = `/api/template?id=${encodeURIComponent(id)}&url=${encodeURIComponent(imageUrl)}`;
-      saveLink.download = `clothify-${id}.png`;
-      saveLink.style.pointerEvents = 'auto';
-      saveLink.style.opacity = '1';
-
       previewId.textContent = `ID ${id}`;
       status.className = 'ok';
       status.textContent = 'Template ready.';
+
+      // Enable download button — uses canvas to export blob without needing fetch
+      saveLink.style.pointerEvents = 'auto';
+      saveLink.style.opacity = '1';
+      saveLink.onclick = async (e) => {
+        e.preventDefault();
+        try {
+          await img.decode(); // ensure fully loaded
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          canvas.getContext('2d').drawImage(img, 0, 0);
+          canvas.toBlob(blob => {
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = `clothify-${id}.png`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+          }, 'image/png');
+        } catch {
+          // crossOrigin tainted — fall back to opening the image URL directly
+          window.open(imageUrl, '_blank');
+        }
+      };
     } catch(err) {
       loading.style.display = 'none';
       placeholder.style.display = 'flex';
