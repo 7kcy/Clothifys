@@ -1,95 +1,119 @@
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
 
-  const id = req.query.id;
+export const config = { runtime: "edge" };
+
+export default async function handler(request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get("id");
 
   if (!id || !/^\d+$/.test(id)) {
-    return res.status(400).json({ error: "Invalid asset ID." });
+    return new Response(JSON.stringify({ error: "Invalid asset ID." }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
 
-  const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-  };
-
   try {
-    // Step 1: Get CDN location from Roblox delivery API
     const deliveryRes = await fetch(
       `https://assetdelivery.roblox.com/v1/assetId/${id}`,
       { headers: HEADERS }
     );
 
     if (!deliveryRes.ok) {
-      return res.status(502).json({ error: "Could not reach Roblox. Try again shortly." });
+      return new Response(JSON.stringify({ error: "Could not reach Roblox. Try again shortly." }), {
+        status: 502,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
     }
 
     const deliveryJson = await deliveryRes.json();
     const location = deliveryJson?.location;
 
     if (!location) {
-      return res.status(404).json({ error: "Asset not found or not accessible." });
+      return new Response(JSON.stringify({ error: "Asset not found or not accessible." }), {
+        status: 404,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
     }
 
-    // Step 2: Fetch the asset file
     const assetRes = await fetch(location, { headers: HEADERS, redirect: "follow" });
 
     if (!assetRes.ok) {
-      return res.status(502).json({ error: "Could not download asset from Roblox CDN." });
+      return new Response(JSON.stringify({ error: "Could not download asset from Roblox CDN." }), {
+        status: 502,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
     }
 
     const contentType = assetRes.headers.get("content-type") || "";
 
-    // Already an image — send it directly
     if (contentType.startsWith("image/")) {
       const buffer = await assetRes.arrayBuffer();
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Cache-Control", "public, max-age=86400");
-      return res.status(200).send(Buffer.from(buffer));
+      return new Response(buffer, {
+        status: 200,
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=86400",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
     }
 
-    // XML — extract texture asset ID using multiple patterns
     const xml = await assetRes.text();
 
     const urlTagMatch = xml.match(/<url>\s*(https?:\/\/[^<\s]+)\s*<\/url>/i);
     if (urlTagMatch) {
       const innerUrl = urlTagMatch[1].trim();
       const idInUrl = innerUrl.match(/[?&]id=(\d+)/i);
-      if (idInUrl) return await fetchImageById(idInUrl[1], res, HEADERS);
-      return await fetchImageByUrl(innerUrl, res, HEADERS);
+      if (idInUrl) return await fetchImageById(idInUrl[1]);
+      return await fetchImageByUrl(innerUrl);
     }
 
     const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
-    if (rbxMatch) return await fetchImageById(rbxMatch[1], res, HEADERS);
+    if (rbxMatch) return await fetchImageById(rbxMatch[1]);
 
     const bareUrlMatch = xml.match(/https?:\/\/www\.roblox\.com\/asset\/\?id=(\d+)/i);
-    if (bareUrlMatch) return await fetchImageById(bareUrlMatch[1], res, HEADERS);
+    if (bareUrlMatch) return await fetchImageById(bareUrlMatch[1]);
 
-    return res.status(404).json({ error: "Not a classic clothing item. Only shirts and pants are supported." });
+    return new Response(JSON.stringify({ error: "Not a classic clothing item." }), {
+      status: 404,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Server error. Please try again." });
+    return new Response(JSON.stringify({ error: "Server error. Please try again." }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
 }
 
-async function fetchImageById(id, res, HEADERS) {
+async function fetchImageById(id) {
   const deliveryRes = await fetch(
     `https://assetdelivery.roblox.com/v1/assetId/${id}`,
     { headers: HEADERS }
   );
-  if (!deliveryRes.ok) return res.status(502).json({ error: "Could not fetch template image." });
+  if (!deliveryRes.ok) return new Response(JSON.stringify({ error: "Could not fetch template image." }), { status: 502, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
   const json = await deliveryRes.json();
-  if (!json?.location) return res.status(404).json({ error: "Template image not found." });
-  return fetchImageByUrl(json.location, res, HEADERS);
+  if (!json?.location) return new Response(JSON.stringify({ error: "Template image not found." }), { status: 404, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+  return fetchImageByUrl(json.location);
 }
 
-async function fetchImageByUrl(url, res, HEADERS) {
+async function fetchImageByUrl(url) {
   const imgRes = await fetch(url, { headers: HEADERS, redirect: "follow" });
-  if (!imgRes.ok) return res.status(502).json({ error: "Could not fetch template image from Roblox." });
+  if (!imgRes.ok) return new Response(JSON.stringify({ error: "Could not fetch template image from Roblox." }), { status: 502, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
   const buffer = await imgRes.arrayBuffer();
   const contentType = imgRes.headers.get("content-type") || "image/png";
-  res.setHeader("Content-Type", contentType);
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  return res.status(200).send(Buffer.from(buffer));
+  return new Response(buffer, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=86400",
+      "Access-Control-Allow-Origin": "*"
+    }
+  });
 }
