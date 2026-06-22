@@ -655,13 +655,21 @@
     btn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.25"/><path d="M8 5.5v5M5.5 8.5l2.5 2.5 2.5-2.5"/></svg> Loading…`;
 
     try {
-      const res = await fetch(`/api/template?id=${encodeURIComponent(id)}&log=client`);
-      if (!res.ok) {
-        let msg = 'Could not fetch that template.';
-        try { const d = await res.json(); if (d && d.error) msg = d.error; } catch(_) {}
-        throw new Error(msg);
+      // Step 1: Ask Roblox thumbnail API directly from the browser (no server needed)
+      const thumbRes = await fetch(
+        `https://thumbnails.roblox.com/v1/assets?assetIds=${encodeURIComponent(id)}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false`
+      );
+      if (!thumbRes.ok) throw new Error(`Thumbnail API returned ${thumbRes.status}`);
+      const thumbData = await thumbRes.json();
+      const thumbItem = thumbData?.data?.[0];
+      if (!thumbItem || thumbItem.state !== 'Completed' || !thumbItem.imageUrl) {
+        throw new Error('Thumbnail not available for this item.');
       }
-      const blob = await res.blob();
+
+      // Step 2: Fetch the actual image from Roblox CDN
+      const imgRes = await fetch(thumbItem.imageUrl);
+      if (!imgRes.ok) throw new Error(`Image fetch failed: ${imgRes.status}`);
+      const blob = await imgRes.blob();
       const url = URL.createObjectURL(blob);
 
       img.src = url;
