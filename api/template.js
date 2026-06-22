@@ -8,12 +8,13 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
   const { id } = req.query;
+
   if (!id || !/^\d+$/.test(id)) {
     return res.status(400).json({ error: "Invalid asset ID." });
   }
 
   try {
-    // Step 1: Use assetdelivery API to get the CDN location for the asset XML
+    // Step 1: Use assetdelivery API to get CDN location
     const deliveryRes = await fetch(
       `https://assetdelivery.roblox.com/v1/assetId/${id}`,
       { headers: HEADERS }
@@ -30,7 +31,7 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Asset not found or not accessible." });
     }
 
-    // Step 2: Fetch the actual asset from the CDN location
+    // Step 2: Fetch the asset from CDN
     const assetRes = await fetch(location, { headers: HEADERS, redirect: "follow" });
 
     if (!assetRes.ok) {
@@ -39,7 +40,7 @@ export default async function handler(req, res) {
 
     const contentType = assetRes.headers.get("content-type") || "";
 
-    // If the CDN returned an image directly, send it
+    // If CDN returned an image directly, send it
     if (contentType.startsWith("image/")) {
       const buffer = await assetRes.arrayBuffer();
       res.setHeader("Content-Type", contentType);
@@ -47,10 +48,10 @@ export default async function handler(req, res) {
       return res.status(200).send(Buffer.from(buffer));
     }
 
-    // Otherwise it's XML — parse out the ShirtTemplate/PantsTemplate URL
+    // Parse XML to get the ShirtTemplate/PantsTemplate URL
     const xml = await assetRes.text();
-
     const urlMatch = xml.match(/<url>\s*(https?:\/\/[^<\s]+)\s*<\/url>/i);
+
     if (!urlMatch) {
       const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
       if (rbxMatch) {
@@ -59,8 +60,7 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Not a classic clothing item. Only shirts and pants are supported." });
     }
 
-    const templateUrl = urlMatch[1].trim();
-    return await fetchImageByUrl(templateUrl, res);
+    return await fetchImageByUrl(urlMatch[1].trim(), res);
 
   } catch (err) {
     console.error(err);
