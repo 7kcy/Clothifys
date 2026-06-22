@@ -666,17 +666,15 @@
         throw new Error('Thumbnail not available for this item.');
       }
 
-      // Step 2: Fetch the actual image from Roblox CDN
-      const imgRes = await fetch(thumbItem.imageUrl);
-      if (!imgRes.ok) throw new Error(`Image fetch failed: ${imgRes.status}`);
-      const blob = await imgRes.blob();
-      const url = URL.createObjectURL(blob);
+      // Step 2: Display image directly (rbxcdn.com blocks fetch/CORS but allows <img> src)
+      const imageUrl = thumbItem.imageUrl;
 
-      img.src = url;
+      img.src = imageUrl;
       img.style.display = 'block';
       loading.style.display = 'none';
 
-      saveLink.href = url;
+      // For download, route through the server proxy so we can serve the blob
+      saveLink.href = `/api/template?id=${encodeURIComponent(id)}`;
       saveLink.download = `clothify-${id}.png`;
       saveLink.style.pointerEvents = 'auto';
       saveLink.style.opacity = '1';
