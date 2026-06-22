@@ -2,7 +2,9 @@ export const config = { runtime: "edge" };
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Accept": "*/*",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
 };
 
 function jsonResp(data, status = 200) {
@@ -23,6 +25,11 @@ function imgResp(buffer, contentType) {
   });
 }
 
+async function fetchUrl(url) {
+  const res = await fetch(url, { headers: HEADERS, redirect: "follow" });
+  return res;
+}
+
 export default async function handler(request) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
@@ -32,75 +39,67 @@ export default async function handler(request) {
   }
 
   try {
-    // Step 1: get asset details to find the texture asset ID
-    const infoRes = await fetch(
-      `https://economy.roblox.com/v2/assets/${id}/details`,
-      { headers: HEADERS }
-    );
+    // Fetch the asset XML directly
+    const assetRes = await fetchUrl(`https://assetdelivery.roblox.com/v1/asset/?id=${id}`);
 
-    if (!infoRes.ok) {
-      return jsonResp({ error: "Could not find that asset on Roblox." }, 502);
+    if (!assetRes.ok) {
+      return jsonResp({ error: `Roblox returned ${assetRes.status} for asset ${id}` }, 502);
     }
 
-    const info = await infoRes.json();
-    // AssetTypeId 11 = Shirt, 12 = Pants
-    if (info.AssetTypeId !== 11 && info.AssetTypeId !== 12) {
-      return jsonResp({ error: "Not a classic shirt or pants item." }, 400);
+    const contentType = assetRes.headers.get("content-type") || "";
+
+    // Already an image
+    if (contentType.startsWith("image/")) {
+      return imgResp(await assetRes.arrayBuffer(), contentType);
     }
 
-    // Step 2: get the asset XML to find the texture ID
-    const xmlRes = await fetch(
-      `https://assetdelivery.roblox.com/v1/asset/?id=${id}`,
-      { headers: HEADERS }
-    );
+    // Parse XML for texture ID
+    const xml = await assetRes.text();
 
-    if (!xmlRes.ok) {
-      return jsonResp({ error: "Could not load asset data." }, 502);
-    }
-
-    const xml = await xmlRes.text();
-
-    // Extract texture asset ID from XML
     let textureId = null;
-    const urlMatch = xml.match(/<url>[^<]*[?&]id=(\d+)[^<]*<\/url>/i);
-    if (urlMatch) textureId = urlMatch[1];
-    if (!textureId) {
-      const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
-      if (rbxMatch) textureId = rbxMatch[1];
+    const patterns = [
+      /<url>[^<]*[?&]id=(\d+)[^<]*<\/url>/i,
+      /rbxassetid:\/\/(\d+)/i,
+      /https?:\/\/www\.roblox\.com\/asset\/\?id=(\d+)/i,
+    ];
+    for (const pattern of patterns) {
+      const m = xml.match(pattern);
+      if (m) { textureId = m[1]; break; }
     }
 
     if (!textureId) {
-      return jsonResp({ error: "Could not find texture for this item." }, 404);
+      return jsonResp({ error: "Not a classic clothing item (no texture found).", xml: xml.slice(0, 300) }, 404);
     }
 
-    // Step 3: fetch the actual PNG via assetdelivery
-    const imgRes = await fetch(
-      `https://assetdelivery.roblox.com/v1/asset/?id=${textureId}`,
-      { headers: HEADERS }
-    );
+    // Fetch the texture image
+    const imgRes = await fetchUrl(`https://assetdelivery.roblox.com/v1/asset/?id=${textureId}`);
 
     if (!imgRes.ok) {
-      return jsonResp({ error: "Could not download template image." }, 502);
+      return jsonResp({ error: `Roblox returned ${imgRes.status} for texture ${textureId}` }, 502);
     }
 
-    const contentType = imgRes.headers.get("content-type") || "image/png";
-    if (contentType.startsWith("image/")) {
-      const buffer = await imgRes.arrayBuffer();
-      return imgResp(buffer, contentType);
+    const imgContentType = imgRes.headers.get("content-type") || "image/png";
+
+    if (imgContentType.startsWith("image/")) {
+      return imgResp(await imgRes.arrayBuffer(), imgContentType);
     }
 
-    // If we got another redirect/XML, one more hop
+    // One more hop if needed
     const xml2 = await imgRes.text();
-    const urlMatch2 = xml2.match(/<url>[^<]*[?&]id=(\d+)[^<]*<\/url>/i) || xml2.match(/rbxassetid:\/\/(\d+)/i);
-    if (!urlMatch2) return jsonResp({ error: "Template not found." }, 404);
+    let textureId2 = null;
+    for (const pattern of patterns) {
+      const m = xml2.match(pattern);
+      if (m) { textureId2 = m[1]; break; }
+    }
 
-    const finalRes = await fetch(
-      `https://assetdelivery.roblox.com/v1/asset/?id=${urlMatch2[1]}`,
-      { headers: HEADERS }
-    );
-    if (!finalRes.ok) return jsonResp({ error: "Could not fetch final image." }, 502);
-    const buffer = await finalRes.arrayBuffer();
-    return imgResp(buffer, finalRes.headers.get("content-type") || "image/png");
+    if (!textureId2) {
+      return jsonResp({ error: "Could not resolve final texture.", xml: xml2.slice(0, 300) }, 404);
+    }
+
+    const finalRes = await fetchUrl(`https://assetdelivery.roblox.com/v1/asset/?id=${textureId2}`);
+    if (!finalRes.ok) return jsonResp({ error: `Final texture fetch failed: ${finalRes.status}` }, 502);
+
+    return imgResp(await finalRes.arrayBuffer(), finalRes.headers.get("content-type") || "image/png");
 
   } catch (err) {
     return jsonResp({ error: "Server error: " + err.message }, 500);
