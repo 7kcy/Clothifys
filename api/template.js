@@ -14,7 +14,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // Step 1: assetdelivery API -> get CDN location of the asset
+    // Step 1: Get the CDN location from the assetdelivery JSON API
     const deliveryRes = await fetch(
       `https://assetdelivery.roblox.com/v1/assetId/${id}`,
       { headers: HEADERS }
@@ -31,7 +31,7 @@ module.exports = async function handler(req, res) {
       return res.status(404).json({ error: "Asset not found or not accessible." });
     }
 
-    // Step 2: Fetch the asset file from the CDN URL
+    // Step 2: Fetch the asset from the CDN URL
     const assetRes = await fetch(location, { headers: HEADERS, redirect: "follow" });
 
     if (!assetRes.ok) {
@@ -40,7 +40,7 @@ module.exports = async function handler(req, res) {
 
     const contentType = assetRes.headers.get("content-type") || "";
 
-    // If it came back as an image directly, pipe it through
+    // If it's already an image, pipe it through directly
     if (contentType.startsWith("image/")) {
       const buffer = await assetRes.arrayBuffer();
       res.setHeader("Content-Type", contentType);
@@ -48,17 +48,34 @@ module.exports = async function handler(req, res) {
       return res.status(200).send(Buffer.from(buffer));
     }
 
-    // Otherwise it's XML — find the ShirtTemplate/PantsTemplate image URL
+    // Otherwise it's XML — extract the texture asset ID or URL using multiple patterns
     const xml = await assetRes.text();
-    const urlMatch = xml.match(/<url>\s*(https?:\/\/[^<\s]+)\s*<\/url>/i);
 
-    if (!urlMatch) {
-      const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
-      if (rbxMatch) return fetchImageById(rbxMatch[1], res);
-      return res.status(404).json({ error: "Not a classic clothing item. Only shirts and pants are supported." });
+    // Pattern 1: <url>https://www.roblox.com/asset/?id=XXXXXXX</url>
+    const urlTagMatch = xml.match(/<url>\s*(https?:\/\/[^<\s]+)\s*<\/url>/i);
+    if (urlTagMatch) {
+      const innerUrl = urlTagMatch[1].trim();
+      // Extract numeric ID from URL if it contains one
+      const idInUrl = innerUrl.match(/[?&]id=(\d+)/i);
+      if (idInUrl) {
+        return await fetchImageById(idInUrl[1], res);
+      }
+      return await fetchImageByUrl(innerUrl, res);
     }
 
-    return await fetchImageByUrl(urlMatch[1].trim(), res);
+    // Pattern 2: rbxassetid://XXXXXXX
+    const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
+    if (rbxMatch) {
+      return await fetchImageById(rbxMatch[1], res);
+    }
+
+    // Pattern 3: bare URL anywhere in the XML
+    const bareUrlMatch = xml.match(/https?:\/\/www\.roblox\.com\/asset\/\?id=(\d+)/i);
+    if (bareUrlMatch) {
+      return await fetchImageById(bareUrlMatch[1], res);
+    }
+
+    return res.status(404).json({ error: "Not a classic clothing item. Only shirts and pants are supported." });
 
   } catch (err) {
     console.error(err);

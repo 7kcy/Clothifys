@@ -1,6 +1,9 @@
 {
   "routes": [
     { "src": "/api/template", "dest": "/api/template.js" },
+    { "src": "/Clothifyicon.png", "dest": "/Clothifyicon.png" },
+    { "src": "/(.*\\.png)", "dest": "/$1" },
+    { "src": "/(.*\\.ico)", "dest": "/$1" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
