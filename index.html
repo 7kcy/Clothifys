@@ -655,53 +655,36 @@
     btn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.25"/><path d="M8 5.5v5M5.5 8.5l2.5 2.5 2.5-2.5"/></svg> Loading…`;
 
     try {
-      // Step 1: Ask Roblox thumbnail API directly from the browser (no server needed)
-      const thumbRes = await fetch(
-        `https://thumbnails.roblox.com/v1/assets?assetIds=${encodeURIComponent(id)}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false`
+      // Step 1: Fetch the actual template via assetdelivery — CORS-friendly, no server needed
+      const assetRes = await fetch(
+        `https://assetdelivery.roblox.com/v1/asset/?id=${encodeURIComponent(id)}`
       );
-      if (!thumbRes.ok) throw new Error(`Thumbnail API returned ${thumbRes.status}`);
-      const thumbData = await thumbRes.json();
-      const thumbItem = thumbData?.data?.[0];
-      if (!thumbItem || thumbItem.state !== 'Completed' || !thumbItem.imageUrl) {
-        throw new Error('Thumbnail not available for this item.');
-      }
+      if (!assetRes.ok) throw new Error(`Asset fetch failed (${assetRes.status}). Check the ID is a classic shirt or pants.`);
 
-      // Step 2: Display image directly (rbxcdn.com blocks fetch but allows <img> src)
-      const imageUrl = thumbItem.imageUrl;
+      // Response is XML pointing to the actual PNG texture URL
+      const xml = await assetRes.text();
+      const match = xml.match(/https:\/\/[^\s"<]+\.png/i);
+      if (!match) throw new Error('Could not find template image. Make sure this is a classic shirt or pants ID.');
 
-      img.crossOrigin = 'anonymous';
-      img.src = imageUrl;
+      // Step 2: Fetch the actual PNG (this CDN allows CORS)
+      const pngRes = await fetch(match[0]);
+      if (!pngRes.ok) throw new Error(`Template image fetch failed (${pngRes.status})`);
+      const pngBlob = await pngRes.blob();
+      const finalUrl = URL.createObjectURL(pngBlob);
+
+      img.src = finalUrl;
       img.style.display = 'block';
       loading.style.display = 'none';
+
+      saveLink.href = finalUrl;
+      saveLink.download = `clothify-${id}.png`;
+      saveLink.style.pointerEvents = 'auto';
+      saveLink.style.opacity = '1';
+      saveLink.onclick = null;
 
       previewId.textContent = `ID ${id}`;
       status.className = 'ok';
       status.textContent = 'Template ready.';
-
-      // Enable download button — uses canvas to export blob without needing fetch
-      saveLink.style.pointerEvents = 'auto';
-      saveLink.style.opacity = '1';
-      saveLink.onclick = async (e) => {
-        e.preventDefault();
-        try {
-          await img.decode(); // ensure fully loaded
-          const canvas = document.createElement('canvas');
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
-          canvas.getContext('2d').drawImage(img, 0, 0);
-          canvas.toBlob(blob => {
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = `clothify-${id}.png`;
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-          }, 'image/png');
-        } catch {
-          // crossOrigin tainted — fall back to opening the image URL directly
-          window.open(imageUrl, '_blank');
-        }
-      };
     } catch(err) {
       loading.style.display = 'none';
       placeholder.style.display = 'flex';
