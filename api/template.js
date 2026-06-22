@@ -4,17 +4,17 @@ const HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const { id } = req.query;
+  const id = req.query.id;
 
   if (!id || !/^\d+$/.test(id)) {
     return res.status(400).json({ error: "Invalid asset ID." });
   }
 
   try {
-    // Step 1: Use assetdelivery API to get CDN location
+    // Step 1: assetdelivery API -> get CDN location of the asset
     const deliveryRes = await fetch(
       `https://assetdelivery.roblox.com/v1/assetId/${id}`,
       { headers: HEADERS }
@@ -25,13 +25,13 @@ export default async function handler(req, res) {
     }
 
     const deliveryJson = await deliveryRes.json();
-    const location = deliveryJson?.location;
+    const location = deliveryJson && deliveryJson.location;
 
     if (!location) {
       return res.status(404).json({ error: "Asset not found or not accessible." });
     }
 
-    // Step 2: Fetch the asset from CDN
+    // Step 2: Fetch the asset file from the CDN URL
     const assetRes = await fetch(location, { headers: HEADERS, redirect: "follow" });
 
     if (!assetRes.ok) {
@@ -40,7 +40,7 @@ export default async function handler(req, res) {
 
     const contentType = assetRes.headers.get("content-type") || "";
 
-    // If CDN returned an image directly, send it
+    // If it came back as an image directly, pipe it through
     if (contentType.startsWith("image/")) {
       const buffer = await assetRes.arrayBuffer();
       res.setHeader("Content-Type", contentType);
@@ -48,15 +48,13 @@ export default async function handler(req, res) {
       return res.status(200).send(Buffer.from(buffer));
     }
 
-    // Parse XML to get the ShirtTemplate/PantsTemplate URL
+    // Otherwise it's XML — find the ShirtTemplate/PantsTemplate image URL
     const xml = await assetRes.text();
     const urlMatch = xml.match(/<url>\s*(https?:\/\/[^<\s]+)\s*<\/url>/i);
 
     if (!urlMatch) {
       const rbxMatch = xml.match(/rbxassetid:\/\/(\d+)/i);
-      if (rbxMatch) {
-        return fetchImageById(rbxMatch[1], res);
-      }
+      if (rbxMatch) return fetchImageById(rbxMatch[1], res);
       return res.status(404).json({ error: "Not a classic clothing item. Only shirts and pants are supported." });
     }
 
@@ -66,7 +64,7 @@ export default async function handler(req, res) {
     console.error(err);
     return res.status(500).json({ error: "Server error. Please try again." });
   }
-}
+};
 
 async function fetchImageById(id, res) {
   const deliveryRes = await fetch(
@@ -75,7 +73,7 @@ async function fetchImageById(id, res) {
   );
   if (!deliveryRes.ok) return res.status(502).json({ error: "Could not fetch template image." });
   const json = await deliveryRes.json();
-  if (!json?.location) return res.status(404).json({ error: "Template image not found." });
+  if (!json || !json.location) return res.status(404).json({ error: "Template image not found." });
   return fetchImageByUrl(json.location, res);
 }
 
