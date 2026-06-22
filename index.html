@@ -673,8 +673,8 @@
       img.style.display = 'block';
       loading.style.display = 'none';
 
-      // For download, route through the server proxy so we can serve the blob
-      saveLink.href = `/api/template?id=${encodeURIComponent(id)}`;
+      // For download, pass the CDN URL directly so server doesn't need to call Roblox again
+      saveLink.href = `/api/template?id=${encodeURIComponent(id)}&url=${encodeURIComponent(imageUrl)}`;
       saveLink.download = `clothify-${id}.png`;
       saveLink.style.pointerEvents = 'auto';
       saveLink.style.opacity = '1';

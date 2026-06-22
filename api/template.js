@@ -12,25 +12,35 @@ function jsonErr(msg, status = 400) {
 export default async function handler(request) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
+  const cdnUrl = searchParams.get("url");
 
   if (!id || !/^\d+$/.test(id)) return jsonErr("Invalid asset ID.");
 
   try {
-    // Look up the CDN URL from Roblox thumbnail API
-    const thumbRes = await fetch(
-      `https://thumbnails.roblox.com/v1/assets?assetIds=${id}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false`,
-      { headers: { "User-Agent": UA } }
-    );
-    if (!thumbRes.ok) return jsonErr(`Thumbnail API returned ${thumbRes.status}`, 502);
+    let imageUrl = cdnUrl;
 
-    const thumbData = await thumbRes.json();
-    const item = thumbData?.data?.[0];
-    if (!item || item.state !== "Completed" || !item.imageUrl) {
-      return jsonErr("Thumbnail not available for this item.", 404);
+    // Only hit Roblox if we don't already have the CDN URL
+    if (!imageUrl) {
+      const thumbRes = await fetch(
+        `https://thumbnails.roblox.com/v1/assets?assetIds=${id}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false`,
+        { headers: { "User-Agent": UA } }
+      );
+      if (!thumbRes.ok) return jsonErr(`Thumbnail API returned ${thumbRes.status}`, 502);
+      const thumbData = await thumbRes.json();
+      const item = thumbData?.data?.[0];
+      if (!item || item.state !== "Completed" || !item.imageUrl) {
+        return jsonErr("Thumbnail not available for this item.", 404);
+      }
+      imageUrl = item.imageUrl;
+    }
+
+    // Validate it's actually a Roblox CDN URL before proxying
+    if (!/^https:\/\/tr\.rbxcdn\.com\//.test(imageUrl)) {
+      return jsonErr("Invalid CDN URL.", 400);
     }
 
     // Proxy the CDN image back to the browser
-    const imgRes = await fetch(item.imageUrl, { headers: { "User-Agent": UA } });
+    const imgRes = await fetch(imageUrl, { headers: { "User-Agent": UA } });
     if (!imgRes.ok) return jsonErr(`Image fetch failed: ${imgRes.status}`, 502);
 
     const buffer = await imgRes.arrayBuffer();
